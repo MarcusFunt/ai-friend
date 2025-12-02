@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -9,6 +10,9 @@ from fastapi.staticfiles import StaticFiles
 import nemo.collections.asr as nemo_asr
 
 MODEL_ID = os.getenv("MODEL_ID", "nvidia/parakeet-tdt-0.6b-v3")
+
+
+logger = logging.getLogger(__name__)
 
 
 def load_asr_model():
@@ -60,12 +64,22 @@ async def transcribe(file: UploadFile = File(...)):
         # The transcribe method expects a list of file paths.
         result = await loop.run_in_executor(None, asr_model_instance.transcribe, [tmp_path])
 
-        # The result is a list of objects with a 'text' attribute.
-        transcription = result[0].text if result else ""
+        if not result:
+            message = "Transcription returned no results."
+            logger.error(message)
+            return JSONResponse({"error": message}, status_code=500)
+
+        # The result is expected to be a list of transcription strings.
+        transcription = result[0]
+        if not transcription:
+            message = "Transcription result was empty."
+            logger.error(message)
+            return JSONResponse({"error": message}, status_code=500)
 
         return {"text": transcription}
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"error": str(exc)}, status_code=500)
+        logger.exception("Transcription failed: %s", exc)
+        return JSONResponse({"error": "Transcription failed."}, status_code=500)
     finally:
         if "tmp_path" in locals() and os.path.exists(tmp_path):
             os.remove(tmp_path)
