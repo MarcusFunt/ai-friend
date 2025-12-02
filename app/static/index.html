@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Parakeet TDT Push-to-Talk Demo</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>Parakeet TDT Speech-to-Text</h1>
+        <p>
+          Hold the <strong>space bar</strong> to record, then release to send audio
+          to the server for transcription with
+          <a href="https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3" target="_blank">nvidia/parakeet-tdt-0.6b-v3</a>.
+        </p>
+      </header>
+
+      <div class="status">
+        <div id="indicator" class="indicator idle"></div>
+        <div>
+          <p id="status">Idle – hold space to start recording.</p>
+          <p id="hint">Recording happens only while the key is held down.</p>
+        </div>
+      </div>
+
+      <main>
+        <button id="recordButton" class="record">Press and hold space</button>
+        <div class="output">
+          <h2>Transcription</h2>
+          <pre id="transcript">(your transcript will appear here)</pre>
+        </div>
+      </main>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>
