@@ -4,18 +4,6 @@ This repository provides a minimal web UI and Python backend to try the [nvidia/
 
 ## Running locally with Docker
 
-### One-command installer
-
-Use the bundled installer to build the image, warm the Hugging Face model cache, and print the `docker run` command you need to start the service. It requires Docker to already be installed on your machine.
-
-```bash
-./install.sh
-```
-
-After it finishes, start the app using the suggested command (defaults to port `8000`). The installer also creates a Docker volume (`parakeet-tdt-cache` by default) so subsequent runs reuse the downloaded model weights.
-
-### Manual steps
-
 ```bash
 docker build -t parakeet-tdt-demo .
 docker run -p 8000:8000 parakeet-tdt-demo
