@@ -9,13 +9,16 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
-MODEL_ID = "nvidia/parakeet-tdt-0.6b-v3"
+MODEL_ID = os.getenv("MODEL_ID", "nvidia/parakeet-tdt-0.6b-v3")
+
 
 def load_asr_pipeline():
-    processor = AutoProcessor.from_pretrained(MODEL_ID)
+    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.float32,
+        torch_dtype=torch_dtype,
+        trust_remote_code=True,
     )
 
     device = 0 if torch.cuda.is_available() else "cpu"
@@ -25,14 +28,28 @@ def load_asr_pipeline():
         model=model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
-        torch_dtype=torch.float32,
+        torch_dtype=torch_dtype,
         device=device,
         max_new_tokens=128,
         chunk_length_s=30,
     )
 
 app = FastAPI(title="Parakeet TDT Demo", description="Push-to-talk speech-to-text demo")
-asr_pipeline = load_asr_pipeline()
+pipeline_lock = asyncio.Lock()
+asr_pipeline = None
+
+
+async def get_asr_pipeline():
+    global asr_pipeline
+    if asr_pipeline is not None:
+        return asr_pipeline
+
+    async with pipeline_lock:
+        if asr_pipeline is None:
+            loop = asyncio.get_running_loop()
+            asr_pipeline = await loop.run_in_executor(None, load_asr_pipeline)
+
+    return asr_pipeline
 
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
@@ -52,8 +69,11 @@ async def transcribe(file: UploadFile = File(...)):
             tmp.write(contents)
             tmp_path = tmp.name
 
+        # Lazily load the pipeline to keep startup responsive.
+        loop = asyncio.get_running_loop()
+        asr_pipeline = await get_asr_pipeline()
+
         # Run inference in a thread to avoid blocking the event loop.
-        loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, asr_pipeline, tmp_path)
         transcription = result["text"]
 
