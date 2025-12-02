@@ -3,53 +3,35 @@ import os
 import tempfile
 from pathlib import Path
 
-import torch
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+import nemo.collections.asr as nemo_asr
 
 MODEL_ID = os.getenv("MODEL_ID", "nvidia/parakeet-tdt-0.6b-v3")
 
 
-def load_asr_pipeline():
-    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch_dtype,
-        trust_remote_code=True,
-    )
-
-    device = 0 if torch.cuda.is_available() else "cpu"
-
-    return pipeline(
-        "automatic-speech-recognition",
-        model=model,
-        tokenizer=processor.tokenizer,
-        feature_extractor=processor.feature_extractor,
-        torch_dtype=torch_dtype,
-        device=device,
-        max_new_tokens=128,
-        chunk_length_s=30,
-    )
+def load_asr_model():
+    """Loads the ASR model."""
+    return nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_ID)
 
 app = FastAPI(title="Parakeet TDT Demo", description="Push-to-talk speech-to-text demo")
-pipeline_lock = asyncio.Lock()
-asr_pipeline = None
+model_lock = asyncio.Lock()
+asr_model = None
 
 
-async def get_asr_pipeline():
-    global asr_pipeline
-    if asr_pipeline is not None:
-        return asr_pipeline
+async def get_asr_model():
+    """Gets the ASR model, loading it if necessary."""
+    global asr_model
+    if asr_model is not None:
+        return asr_model
 
-    async with pipeline_lock:
-        if asr_pipeline is None:
+    async with model_lock:
+        if asr_model is None:
             loop = asyncio.get_running_loop()
-            asr_pipeline = await loop.run_in_executor(None, load_asr_pipeline)
+            asr_model = await loop.run_in_executor(None, load_asr_model)
 
-    return asr_pipeline
+    return asr_model
 
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
@@ -62,6 +44,7 @@ async def root():
 
 @app.post("/api/transcribe")
 async def transcribe(file: UploadFile = File(...)):
+    """Transcribes an audio file."""
     try:
         suffix = Path(file.filename).suffix or ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -69,13 +52,16 @@ async def transcribe(file: UploadFile = File(...)):
             tmp.write(contents)
             tmp_path = tmp.name
 
-        # Lazily load the pipeline to keep startup responsive.
-        loop = asyncio.get_running_loop()
-        asr_pipeline = await get_asr_pipeline()
+        # Lazily load the model to keep startup responsive.
+        asr_model_instance = await get_asr_model()
 
         # Run inference in a thread to avoid blocking the event loop.
-        result = await loop.run_in_executor(None, asr_pipeline, tmp_path)
-        transcription = result["text"]
+        loop = asyncio.get_running_loop()
+        # The transcribe method expects a list of file paths.
+        result = await loop.run_in_executor(None, asr_model_instance.transcribe, [tmp_path])
+
+        # The result is a list of objects with a 'text' attribute.
+        transcription = result[0].text if result else ""
 
         return {"text": transcription}
     except Exception as exc:  # noqa: BLE001
