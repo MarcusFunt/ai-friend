@@ -60,8 +60,8 @@ async def transcribe(file: UploadFile = File(...)):
         # The transcribe method expects a list of file paths.
         result = await loop.run_in_executor(None, asr_model_instance.transcribe, [tmp_path])
 
-        # The result is a list of objects with a 'text' attribute.
-        transcription = result[0].text if result else ""
+        # The result is a list of transcription strings.
+        transcription = result[0] if result else ""
 
         return {"text": transcription}
     except Exception as exc:  # noqa: BLE001
