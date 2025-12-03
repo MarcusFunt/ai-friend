@@ -7,35 +7,56 @@ from pathlib import Path
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-import nemo.collections.asr as nemo_asr
+import torch
+from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+import librosa
 
-MODEL_ID = os.getenv("MODEL_ID", "nvidia/parakeet-tdt-0.6b-v3")
-
+MODEL_ID = os.getenv("MODEL_ID", "openai/whisper-large-v3")
+# Use float16 for faster inference, and chunking for long-form audio.
+# See: https://huggingface.co/openai/whisper-large-v3#long-form-transcription
+TORCH_DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
+DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
 logger = logging.getLogger(__name__)
 
 
 def load_asr_model():
     """Loads the ASR model."""
-    return nemo_asr.models.ASRModel.from_pretrained(model_name=MODEL_ID)
+    model = AutoModelForSpeechSeq2Seq.from_pretrained(
+        MODEL_ID, torch_dtype=TORCH_DTYPE, low_cpu_mem_usage=True, use_safetensors=True
+    )
+    model.to(DEVICE)
+    processor = AutoProcessor.from_pretrained(MODEL_ID)
+    return pipeline(
+        "automatic-speech-recognition",
+        model=model,
+        tokenizer=processor.tokenizer,
+        feature_extractor=processor.feature_extractor,
+        max_new_tokens=128,
+        chunk_length_s=30,
+        batch_size=16,
+        return_timestamps=True,
+        torch_dtype=TORCH_DTYPE,
+        device=DEVICE,
+    )
 
-app = FastAPI(title="Parakeet TDT Demo", description="Push-to-talk speech-to-text demo")
+app = FastAPI(title="Whisper Demo", description="Push-to-talk speech-to-text demo")
 model_lock = asyncio.Lock()
-asr_model = None
+asr_pipeline = None
 
 
-async def get_asr_model():
-    """Gets the ASR model, loading it if necessary."""
-    global asr_model
-    if asr_model is not None:
-        return asr_model
+async def get_asr_pipeline():
+    """Gets the ASR pipeline, loading it if necessary."""
+    global asr_pipeline
+    if asr_pipeline is not None:
+        return asr_pipeline
 
     async with model_lock:
-        if asr_model is None:
+        if asr_pipeline is None:
             loop = asyncio.get_running_loop()
-            asr_model = await loop.run_in_executor(None, load_asr_model)
+            asr_pipeline = await loop.run_in_executor(None, load_asr_model)
 
-    return asr_model
+    return asr_pipeline
 
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 
@@ -49,6 +70,7 @@ async def root():
 @app.post("/api/transcribe")
 async def transcribe(file: UploadFile = File(...)):
     """Transcribes an audio file."""
+    tmp_path = ""
     try:
         suffix = Path(file.filename).suffix or ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -57,29 +79,24 @@ async def transcribe(file: UploadFile = File(...)):
             tmp_path = tmp.name
 
         # Lazily load the model to keep startup responsive.
-        asr_model_instance = await get_asr_model()
+        asr_pipeline_instance = await get_asr_pipeline()
+
+        # Load the audio file
+        audio, sr = librosa.load(tmp_path, sr=16000)
 
         # Run inference in a thread to avoid blocking the event loop.
         loop = asyncio.get_running_loop()
-        # The transcribe method expects a list of file paths.
-        result = await loop.run_in_executor(None, asr_model_instance.transcribe, [tmp_path])
+        result = await loop.run_in_executor(None, asr_pipeline_instance, audio)
 
-        if not result:
+        if not result or not result.get("text"):
             message = "Transcription returned no results."
             logger.error(message)
             return JSONResponse({"error": message}, status_code=500)
 
-        # The result is expected to be a list of transcription strings.
-        transcription = result[0]
-        if not transcription:
-            message = "Transcription result was empty."
-            logger.error(message)
-            return JSONResponse({"error": message}, status_code=500)
-
-        return {"text": transcription}
+        return {"text": result["text"].strip()}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Transcription failed: %s", exc)
         return JSONResponse({"error": "Transcription failed."}, status_code=500)
     finally:
-        if "tmp_path" in locals() and os.path.exists(tmp_path):
+        if os.path.exists(tmp_path):
             os.remove(tmp_path)
