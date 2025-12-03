@@ -11,9 +11,9 @@ import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 import librosa
 
-MODEL_ID = os.getenv("MODEL_ID", "openai/whisper-large-v3")
+MODEL_ID = os.getenv("MODEL_ID", "openai/whisper-large-v3-turbo")
 # Use float16 for faster inference, and chunking for long-form audio.
-# See: https://huggingface.co/openai/whisper-large-v3#long-form-transcription
+# See: https://huggingface.co/openai/whisper-large-v3-turbo#long-form-transcription
 TORCH_DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 
