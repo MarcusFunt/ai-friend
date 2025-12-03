@@ -36,7 +36,7 @@ def load_asr_model():
         chunk_length_s=30,
         batch_size=16,
         return_timestamps=True,
-        torch_dtype=TORCH_DTYPE,
+        dtype=TORCH_DTYPE,
         device=DEVICE,
     )
 
