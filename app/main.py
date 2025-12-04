@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def load_asr_model():
     """Loads the ASR model."""
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        MODEL_ID, torch_dtype=TORCH_DTYPE, low_cpu_mem_usage=True, use_safetensors=True
+        MODEL_ID, dtype=TORCH_DTYPE, low_cpu_mem_usage=True, use_safetensors=True
     )
     model.to(DEVICE)
     processor = AutoProcessor.from_pretrained(MODEL_ID)
