@@ -9,9 +9,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
-import librosa
 
 MODEL_ID = os.getenv("MODEL_ID", "openai/whisper-large-v3-turbo")
+MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "96"))
+CHUNK_LENGTH_S = int(os.getenv("CHUNK_LENGTH_S", "20"))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "8"))
+
 # Use float16 for faster inference, and chunking for long-form audio.
 # See: https://huggingface.co/openai/whisper-large-v3-turbo#long-form-transcription
 TORCH_DTYPE = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -32,10 +35,10 @@ def load_asr_model():
         model=model,
         tokenizer=processor.tokenizer,
         feature_extractor=processor.feature_extractor,
-        max_new_tokens=128,
-        chunk_length_s=30,
-        batch_size=16,
-        return_timestamps=True,
+        max_new_tokens=MAX_NEW_TOKENS,
+        chunk_length_s=CHUNK_LENGTH_S,
+        batch_size=BATCH_SIZE,
+        return_timestamps=False,
         dtype=TORCH_DTYPE,
         device=DEVICE,
     )
@@ -81,12 +84,9 @@ async def transcribe(file: UploadFile = File(...)):
         # Lazily load the model to keep startup responsive.
         asr_pipeline_instance = await get_asr_pipeline()
 
-        # Load the audio file
-        audio, sr = librosa.load(tmp_path, sr=16000)
-
         # Run inference in a thread to avoid blocking the event loop.
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, asr_pipeline_instance, audio)
+        result = await loop.run_in_executor(None, asr_pipeline_instance, tmp_path)
 
         if not result or not result.get("text"):
             message = "Transcription returned no results."
