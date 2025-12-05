@@ -43,7 +43,6 @@ def load_asr_model():
         return_timestamps=False,
         dtype=TORCH_DTYPE,
         device=DEVICE,
-        task="transcribe",
         language=TARGET_LANGUAGE,
         generate_kwargs={"task": "transcribe", "language": TARGET_LANGUAGE},
         ignore_warning=True,
