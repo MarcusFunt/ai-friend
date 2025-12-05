@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
 MODEL_ID = os.getenv("MODEL_ID", "openai/whisper-large-v3-turbo")
+TARGET_LANGUAGE = os.getenv("TARGET_LANGUAGE", "en")
 MAX_NEW_TOKENS = int(os.getenv("MAX_NEW_TOKENS", "96"))
 CHUNK_LENGTH_S = int(os.getenv("CHUNK_LENGTH_S", "20"))
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "8"))
@@ -41,6 +43,10 @@ def load_asr_model():
         return_timestamps=False,
         dtype=TORCH_DTYPE,
         device=DEVICE,
+        task="transcribe",
+        language=TARGET_LANGUAGE,
+        generate_kwargs={"task": "transcribe", "language": TARGET_LANGUAGE},
+        ignore_warning=True,
     )
 
 app = FastAPI(title="Whisper Demo", description="Push-to-talk speech-to-text demo")
@@ -74,6 +80,7 @@ async def root():
 async def transcribe(file: UploadFile = File(...)):
     """Transcribes an audio file."""
     tmp_path = ""
+    converted_path = ""
     try:
         suffix = Path(file.filename).suffix or ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -81,12 +88,19 @@ async def transcribe(file: UploadFile = File(...)):
             tmp.write(contents)
             tmp_path = tmp.name
 
+        loop = asyncio.get_running_loop()
+        try:
+            converted_path = await loop.run_in_executor(None, convert_to_wav, tmp_path)
+            audio_input = converted_path
+        except subprocess.CalledProcessError as exc:
+            logger.warning("Falling back to original audio after ffmpeg failure: %s", exc)
+            audio_input = tmp_path
+
         # Lazily load the model to keep startup responsive.
         asr_pipeline_instance = await get_asr_pipeline()
 
         # Run inference in a thread to avoid blocking the event loop.
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, asr_pipeline_instance, tmp_path)
+        result = await loop.run_in_executor(None, asr_pipeline_instance, audio_input)
 
         if not result or not result.get("text"):
             message = "Transcription returned no results."
@@ -98,5 +112,27 @@ async def transcribe(file: UploadFile = File(...)):
         logger.exception("Transcription failed: %s", exc)
         return JSONResponse({"error": "Transcription failed."}, status_code=500)
     finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        for path in (tmp_path, converted_path):
+            if path and os.path.exists(path):
+                os.remove(path)
+
+
+def convert_to_wav(source_path: str) -> str:
+    """Converts an input audio file to a mono 16kHz WAV file using ffmpeg."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        output_path = tmp.name
+
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        source_path,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        output_path,
+    ]
+
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    return output_path
